@@ -54,9 +54,9 @@ use crate::lints::{
     BuiltinEllipsisInclusiveRangePatternsLint, BuiltinExplicitOutlives,
     BuiltinExplicitOutlivesSuggestion, BuiltinFeatureIssueNote, BuiltinIncompleteFeatures,
     BuiltinIncompleteFeaturesHelp, BuiltinInternalFeatures, BuiltinKeywordIdents,
-    BuiltinLocalVariablePointerImpl, BuiltinMissingCopyImpl, BuiltinMissingDebugImpl,
-    BuiltinMissingDoc, BuiltinMutablesTransmutes, BuiltinNoMangleGeneric,
-    BuiltinNonShorthandFieldPatterns, BuiltinSpecialModuleNameUsed, BuiltinTrivialBounds,
+    BuiltinMissingCopyImpl, BuiltinMissingDebugImpl, BuiltinMissingDoc, BuiltinMutablesTransmutes,
+    BuiltinNoMangleGeneric, BuiltinNonShorthandFieldPatterns,
+    BuiltinReturningPointersToLocalVariables, BuiltinSpecialModuleNameUsed, BuiltinTrivialBounds,
     BuiltinTypeAliasBounds, BuiltinUngatedAsyncFnTrackCaller, BuiltinUnpermittedTypeInit,
     BuiltinUnpermittedTypeInitSub, BuiltinUnreachablePub, BuiltinUnsafe, BuiltinUnstableFeatures,
     BuiltinUnusedDocComment, BuiltinUnusedDocCommentSub, BuiltinWhileTrue, InvalidAsmLabel,
@@ -2987,9 +2987,9 @@ impl<'tcx> LateLintPass<'tcx> for AsmLabels {
 }
 
 declare_lint! {
-    /// The `return_local_variable_ptr` lint detects when pointer to stack
-    /// memory associated with a local variable is returned. That pointer
-    /// is immediately dangling.
+    /// The `returning_pointers_to_local_variables` lint detects when pointer
+    /// to stack memory associated with a local variable is returned. That
+    /// pointer is immediately dangling.
     ///
     /// ### Example
     ///
@@ -3000,22 +3000,20 @@ declare_lint! {
     /// }
     /// ```
     ///
-    /// This will produce:
-    ///
     /// {{produces}}
     ///
     /// ### Explanation
     ///
     /// Returning a pointer to memory refering to a local variable will always
     /// end up in a dangling pointer after returning.
-    pub RETURN_LOCAL_VARIABLE_PTR,
+    pub RETURNING_POINTERS_TO_LOCAL_VARIABLES,
     Warn,
     "returning a pointer to stack memory associated with a local variable",
 }
 
-declare_lint_pass!(ReturnLocalVariablePointer => [RETURN_LOCAL_VARIABLE_PTR]);
+declare_lint_pass!(ReturningPointersToLocalVariables => [RETURNING_POINTERS_TO_LOCAL_VARIABLES]);
 
-impl<'tcx> LateLintPass<'tcx> for ReturnLocalVariablePointer {
+impl<'tcx> LateLintPass<'tcx> for ReturningPointersToLocalVariables {
     fn check_fn(
         &mut self,
         cx: &LateContext<'tcx>,
@@ -3061,7 +3059,7 @@ impl<'tcx> LateLintPass<'tcx> for ReturnLocalVariablePointer {
     }
 }
 
-impl ReturnLocalVariablePointer {
+impl ReturningPointersToLocalVariables {
     /// Evaluates the return expression of a function and emits a lint if it
     /// returns a pointer to a local variable.
     fn maybe_lint_return_expr<'tcx>(cx: &LateContext<'tcx>, return_expr: &hir::Expr<'tcx>) {
@@ -3078,9 +3076,9 @@ impl ReturnLocalVariablePointer {
             ) = addr_expr.kind
             {
                 cx.emit_span_lint(
-                    RETURN_LOCAL_VARIABLE_PTR,
+                    RETURNING_POINTERS_TO_LOCAL_VARIABLES,
                     return_expr.span,
-                    BuiltinLocalVariablePointerImpl,
+                    BuiltinReturningPointersToLocalVariables,
                 );
             }
         }

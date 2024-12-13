@@ -135,7 +135,7 @@ lint_builtin_overridden_symbol_name =
 lint_builtin_overridden_symbol_section =
     the program's behavior with overridden link sections on items is unpredictable and Rust cannot provide guarantees when you manually override them
 
-lint_builtin_return_local_variable_ptr = returning a pointer to stack memory associated with a local variable
+lint_builtin_returning_pointers_to_local_variables = returning a pointer to stack memory associated with a local variable
 
 lint_builtin_special_module_name_used_lib = found module declaration for lib.rs
     .note = lib.rs is the root of this crate's library target
