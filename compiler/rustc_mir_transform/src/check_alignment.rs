@@ -1,11 +1,10 @@
-use rustc_hir::lang_items::LangItem;
 use rustc_index::IndexVec;
 use rustc_middle::mir::interpret::Scalar;
-use rustc_middle::mir::visit::{MutatingUseContext, NonMutatingUseContext, PlaceContext, Visitor};
 use rustc_middle::mir::*;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{Ty, TyCtxt};
 use rustc_session::Session;
-use tracing::{debug, trace};
+
+use crate::check_pointers::check_pointers;
 
 pub(super) struct CheckAlignment;
 
@@ -19,131 +18,10 @@ impl<'tcx> crate::MirPass<'tcx> for CheckAlignment {
     }
 
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        // This pass emits new panics. If for whatever reason we do not have a panic
-        // implementation, running this pass may cause otherwise-valid code to not compile.
-        if tcx.lang_items().get(LangItem::PanicImpl).is_none() {
-            return;
-        }
-
-        let typing_env = body.typing_env(tcx);
-        let basic_blocks = body.basic_blocks.as_mut();
-        let local_decls = &mut body.local_decls;
-
-        // This pass inserts new blocks. Each insertion changes the Location for all
-        // statements/blocks after. Iterating or visiting the MIR in order would require updating
-        // our current location after every insertion. By iterating backwards, we dodge this issue:
-        // The only Locations that an insertion changes have already been handled.
-        for block in (0..basic_blocks.len()).rev() {
-            let block = block.into();
-            for statement_index in (0..basic_blocks[block].statements.len()).rev() {
-                let location = Location { block, statement_index };
-                let statement = &basic_blocks[block].statements[statement_index];
-                let source_info = statement.source_info;
-
-                let mut finder =
-                    PointerFinder { tcx, local_decls, typing_env, pointers: Vec::new() };
-                finder.visit_statement(statement, location);
-
-                for (local, ty) in finder.pointers {
-                    debug!("Inserting alignment check for {:?}", ty);
-                    let new_block = split_block(basic_blocks, location);
-                    insert_alignment_check(
-                        tcx,
-                        local_decls,
-                        &mut basic_blocks[block],
-                        local,
-                        ty,
-                        source_info,
-                        new_block,
-                    );
-                }
-            }
-        }
+        // Skip trivially aligned place types.
+        let excluded_pointees = [tcx.types.bool, tcx.types.i8, tcx.types.u8];
+        check_pointers(tcx, body, &excluded_pointees, insert_alignment_check);
     }
-}
-
-struct PointerFinder<'a, 'tcx> {
-    tcx: TyCtxt<'tcx>,
-    local_decls: &'a mut LocalDecls<'tcx>,
-    typing_env: ty::TypingEnv<'tcx>,
-    pointers: Vec<(Place<'tcx>, Ty<'tcx>)>,
-}
-
-impl<'a, 'tcx> Visitor<'tcx> for PointerFinder<'a, 'tcx> {
-    fn visit_place(&mut self, place: &Place<'tcx>, context: PlaceContext, location: Location) {
-        // We want to only check reads and writes to Places, so we specifically exclude
-        // Borrow and RawBorrow.
-        match context {
-            PlaceContext::MutatingUse(
-                MutatingUseContext::Store
-                | MutatingUseContext::AsmOutput
-                | MutatingUseContext::Call
-                | MutatingUseContext::Yield
-                | MutatingUseContext::Drop,
-            ) => {}
-            PlaceContext::NonMutatingUse(
-                NonMutatingUseContext::Copy | NonMutatingUseContext::Move,
-            ) => {}
-            _ => {
-                return;
-            }
-        }
-
-        if !place.is_indirect() {
-            return;
-        }
-
-        // Since Deref projections must come first and only once, the pointer for an indirect place
-        // is the Local that the Place is based on.
-        let pointer = Place::from(place.local);
-        let pointer_ty = self.local_decls[place.local].ty;
-
-        // We only want to check places based on unsafe pointers
-        if !pointer_ty.is_unsafe_ptr() {
-            trace!("Indirect, but not based on an unsafe ptr, not checking {:?}", place);
-            return;
-        }
-
-        let pointee_ty =
-            pointer_ty.builtin_deref(true).expect("no builtin_deref for an unsafe pointer");
-        // Ideally we'd support this in the future, but for now we are limited to sized types.
-        if !pointee_ty.is_sized(self.tcx, self.typing_env) {
-            debug!("Unsafe pointer, but pointee is not known to be sized: {:?}", pointer_ty);
-            return;
-        }
-
-        // Try to detect types we are sure have an alignment of 1 and skip the check
-        // We don't need to look for str and slices, we already rejected unsized types above
-        let element_ty = match pointee_ty.kind() {
-            ty::Array(ty, _) => *ty,
-            _ => pointee_ty,
-        };
-        if [self.tcx.types.bool, self.tcx.types.i8, self.tcx.types.u8].contains(&element_ty) {
-            debug!("Trivially aligned place type: {:?}", pointee_ty);
-            return;
-        }
-
-        // Ensure that this place is based on an aligned pointer.
-        self.pointers.push((pointer, pointee_ty));
-
-        self.super_place(place, context, location);
-    }
-}
-
-fn split_block(
-    basic_blocks: &mut IndexVec<BasicBlock, BasicBlockData<'_>>,
-    location: Location,
-) -> BasicBlock {
-    let block_data = &mut basic_blocks[location.block];
-
-    // Drain every statement after this one and move the current terminator to a new basic block
-    let new_block = BasicBlockData {
-        statements: block_data.statements.split_off(location.statement_index),
-        terminator: block_data.terminator.take(),
-        is_cleanup: block_data.is_cleanup,
-    };
-
-    basic_blocks.push(new_block)
 }
 
 fn insert_alignment_check<'tcx>(
