@@ -484,6 +484,9 @@ impl<'tcx> Stable<'tcx> for mir::AssertMessage<'tcx> {
                     found: found.stable(tables),
                 }
             }
+            AssertKind::NullPointerDereference => {
+                stable_mir::mir::AssertMessage::NullPointerDereference
+            }
         }
     }
 }

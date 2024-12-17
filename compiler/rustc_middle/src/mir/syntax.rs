@@ -1012,6 +1012,7 @@ pub enum AssertKind<O> {
     ResumedAfterReturn(CoroutineKind),
     ResumedAfterPanic(CoroutineKind),
     MisalignedPointerDereference { required: O, found: O },
+    NullPointerDereference,
 }
 
 #[derive(Clone, Debug, PartialEq, TyEncodable, TyDecodable, Hash, HashStable)]
