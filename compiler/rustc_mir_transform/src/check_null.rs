@@ -53,12 +53,12 @@ fn insert_null_check<'tcx>(
         user_ty: None,
         const_: Const::Val(ConstValue::Scalar(Scalar::from_target_usize(0, &tcx)), tcx.types.usize),
     }));
-    let is_pointee_zst =
+    let is_pointee_no_zst =
         local_decls.push(LocalDecl::with_source_info(tcx.types.bool, source_info)).into();
     stmts.push(Statement {
         source_info,
         kind: StatementKind::Assign(Box::new((
-            is_pointee_zst,
+            is_pointee_no_zst,
             Rvalue::BinaryOp(BinOp::Eq, Box::new((Operand::Copy(sizeof_pointee), zero.clone()))),
         ))),
     });
@@ -69,7 +69,7 @@ fn insert_null_check<'tcx>(
         source_info,
         kind: StatementKind::Assign(Box::new((
             is_null,
-            Rvalue::BinaryOp(BinOp::Ne, Box::new((Operand::Copy(addr), zero))),
+            Rvalue::BinaryOp(BinOp::Eq, Box::new((Operand::Copy(addr), zero))),
         ))),
     });
 
@@ -79,10 +79,10 @@ fn insert_null_check<'tcx>(
     stmts.push(Statement {
         source_info,
         kind: StatementKind::Assign(Box::new((
-            is_null,
+            should_throw_exception,
             Rvalue::BinaryOp(
-                BinOp::BitOr,
-                Box::new((Operand::Copy(is_null), Operand::Copy(is_pointee_zst))),
+                BinOp::BitAnd,
+                Box::new((Operand::Copy(is_null), Operand::Copy(is_pointee_no_zst))),
             ),
         ))),
     });
