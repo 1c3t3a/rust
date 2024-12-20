@@ -5,6 +5,26 @@ use rustc_middle::mir::*;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use tracing::{debug, trace};
 
+/// Details of a pointer check, the condition on which we decide whether to
+/// fail the assert and an [AssertKind] that defines the behavior on failure.
+pub(crate) struct PointerCheck<'tcx> {
+    pub(crate) cond: Operand<'tcx>,
+    pub(crate) assert_kind: Box<AssertKind<Operand<'tcx>>>,
+}
+
+/// Utility for adding a check for read/write on every sized, unsafe pointer.
+///
+/// Visits every read/write access to a [Sized], unsafe pointer and inserts a
+/// new basic block directly before the pointer access. Then calls `on_finding`
+/// to insert the actual logic for a pointer check (e.g. check for alignment).
+/// This utility takes care of the right order of blocks, the only thing a
+/// caller must do in `on_finding` is:
+/// - Append [Statement]s to `stmts`.
+/// - Append [LocalDecl]s to `local_decls`.
+/// - Return a [PointerCheck] that contains the condition and an [AssertKind].
+///   The AssertKind must be a panic with `#[rustc_nounwind]`.
+/// This utility will insert a terminator block that asserts on the condition
+/// and panics on failure.
 pub(crate) fn check_pointers<'a, 'tcx, F>(
     tcx: TyCtxt<'tcx>,
     body: &mut Body<'tcx>,
@@ -12,14 +32,13 @@ pub(crate) fn check_pointers<'a, 'tcx, F>(
     on_finding: F,
 ) where
     F: Fn(
-        TyCtxt<'tcx>,
-        &mut IndexVec<Local, LocalDecl<'tcx>>,
-        &mut BasicBlockData<'tcx>,
-        Place<'tcx>,
-        Ty<'tcx>,
-        SourceInfo,
-        BasicBlock,
-    ),
+        /* tcx: */ TyCtxt<'tcx>,
+        /* pointer: */ Place<'tcx>,
+        /* pointee_ty: */ Ty<'tcx>,
+        /* local_decls: */ &mut IndexVec<Local, LocalDecl<'tcx>>,
+        /* stmts: */ &mut Vec<Statement<'tcx>>,
+        /* source_info: */ SourceInfo,
+    ) -> PointerCheck<'tcx>,
 {
     // This pass emits new panics. If for whatever reason we do not have a panic
     // implementation, running this pass may cause otherwise-valid code to not compile.
@@ -48,15 +67,33 @@ pub(crate) fn check_pointers<'a, 'tcx, F>(
             for (local, ty) in finder.into_found_pointers() {
                 debug!("Inserting check for {:?}", ty);
                 let new_block = split_block(basic_blocks, location);
-                on_finding(
+
+                // Invoke `on_finding` which appends to `local_decls` and the
+                // blocks statements. It returns information about the assert
+                // we're performing in the Terminator.
+                let block_data = &mut basic_blocks[block];
+                let pointer_check = on_finding(
                     tcx,
-                    local_decls,
-                    &mut basic_blocks[block],
                     local,
                     ty,
+                    local_decls,
+                    &mut block_data.statements,
                     source_info,
-                    new_block,
                 );
+                block_data.terminator = Some(Terminator {
+                    source_info,
+                    kind: TerminatorKind::Assert {
+                        cond: pointer_check.cond,
+                        expected: true,
+                        target: new_block,
+                        msg: pointer_check.assert_kind,
+                        // This calls a panic function associated with the pointer check, which
+                        // is #[rustc_nounwind]. We never want to insert an unwind into unsafe
+                        // code, because unwinding could make a failing UB check turn into much
+                        // worse UB when we start unwinding.
+                        unwind: UnwindAction::Unreachable,
+                    },
+                });
             }
         }
     }
@@ -128,7 +165,7 @@ impl<'a, 'tcx> Visitor<'tcx> for PointerFinder<'a, 'tcx> {
             return;
         }
 
-        // We don't need to look for str and slices, we already rejected unsized types above
+        // We don't need to look for slices, we already rejected unsized types above.
         let element_ty = match pointee_ty.kind() {
             ty::Array(ty, _) => *ty,
             _ => pointee_ty,
@@ -150,7 +187,7 @@ fn split_block(
 ) -> BasicBlock {
     let block_data = &mut basic_blocks[location.block];
 
-    // Drain every statement after this one and move the current terminator to a new basic block
+    // Drain every statement after this one and move the current terminator to a new basic block.
     let new_block = BasicBlockData {
         statements: block_data.statements.split_off(location.statement_index),
         terminator: block_data.terminator.take(),
