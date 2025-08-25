@@ -17,6 +17,7 @@ use rustc_session::lint;
 use rustc_session::parse::feature_err;
 use rustc_span::{Ident, Span, sym};
 use rustc_target::spec::SanitizerSet;
+use tracing::trace;
 
 use crate::errors;
 use crate::errors::NoMangleNameless;
@@ -630,9 +631,18 @@ fn parse_sanitize_attr(
 }
 
 fn disabled_sanitizers_for(tcx: TyCtxt<'_>, did: LocalDefId) -> SanitizerSet {
-    // No need to evaluate the sanitizer attribute if no sanitizer is enabled.
-    if tcx.sess.opts.unstable_opts.sanitizer.is_empty() {
-        return SanitizerSet::empty();
+    // Early exit if this is not called with an `fn`-like
+    match tcx.def_kind(did) {
+        DefKind::Mod
+        | DefKind::Fn
+        | DefKind::Static { .. }
+        | DefKind::AssocFn
+        | DefKind::Impl { .. }
+        | DefKind::Closure => (),
+        _ => {
+            trace!("Sanitizer skipped for {did:?} (not allowed for )");
+            return SanitizerSet::empty();
+        }
     }
 
     // Backtrack to the crate root.

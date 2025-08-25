@@ -1,8 +1,9 @@
 use rustc_feature::{AttributeTemplate, template};
-use rustc_hir::attrs::{AttributeKind, CoverageAttrKind, OptimizeAttr, UsedBy};
+use rustc_hir::attrs::{AttributeKind, CoverageAttrKind, DisabledSanitizers, OptimizeAttr, UsedBy};
 use rustc_hir::{MethodKind, Target};
 use rustc_session::parse::feature_err;
 use rustc_span::{Span, Symbol, sym};
+use rustc_target::spec::SanitizerSet;
 
 use super::{
     AcceptMapping, AttributeOrder, AttributeParser, CombineAttributeParser, ConvertFn,
@@ -448,4 +449,99 @@ impl<S: Stage> CombineAttributeParser<S> for TargetFeatureParser {
         Warn(Target::Arm),
         Warn(Target::MacroDef),
     ]);
+}
+
+pub(crate) struct SanitizeParser;
+
+impl<S: Stage> SingleAttributeParser<S> for SanitizeParser {
+    const PATH: &[Symbol] = &[sym::sanitize];
+    const ATTRIBUTE_ORDER: AttributeOrder = AttributeOrder::KeepOutermost;
+    const ON_DUPLICATE: OnDuplicate<S> = OnDuplicate::Error;
+    const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
+        Allow(Target::Fn),
+        Allow(Target::Closure),
+        Allow(Target::Method(MethodKind::Trait { body: true })),
+        Allow(Target::Method(MethodKind::TraitImpl)),
+        Allow(Target::Method(MethodKind::Inherent)),
+        Allow(Target::Impl { of_trait: true }),
+        Allow(Target::Impl { of_trait: false }),
+        Allow(Target::Mod),
+        Allow(Target::Crate),
+        Allow(Target::Static),
+    ]);
+    const TEMPLATE: AttributeTemplate = template!(OneOf: &[sym::off, sym::on]);
+
+    fn convert(cx: &mut AcceptContext<'_, '_, S>, args: &ArgParser<'_>) -> Option<AttributeKind> {
+        let Some(args) = args.list() else {
+            cx.expected_specific_argument_and_list(cx.attr_span, vec!["on", "off"]);
+            return None;
+        };
+
+        let mut disabled_sanitizers = SanitizerSet::empty();
+        for item in args.mixed() {
+            let Some(name_value) = item.meta_item() else {
+                cx.expected_list(item.span());
+                return None;
+            };
+
+            // Validate name
+            let Some(name) = name_value.path().word_sym() else {
+                cx.expected_name_value(name_value.path().span(), None);
+                return None;
+            };
+            match name {
+                sym::address | sym::kernel_address
+                    if name_value
+                        .args()
+                        .name_value()
+                        .map_or(None, |value| value.value_as_str())
+                        == Some(sym::off) =>
+                {
+                    disabled_sanitizers |= SanitizerSet::ADDRESS | SanitizerSet::KERNELADDRESS
+                }
+                sym::address | sym::kernel_address
+                    if name_value
+                        .args()
+                        .name_value()
+                        .map_or(None, |value| value.value_as_str())
+                        == Some(sym::on) =>
+                {
+                    disabled_sanitizers &= !SanitizerSet::ADDRESS;
+                    disabled_sanitizers &= !SanitizerSet::KERNELADDRESS;
+                }
+                sym::cfi
+                    if name_value
+                        .args()
+                        .name_value()
+                        .map_or(None, |value| value.value_as_str())
+                        == Some(sym::off) =>
+                {
+                    disabled_sanitizers |= SanitizerSet::CFI
+                }
+                sym::cfi
+                    if name_value
+                        .args()
+                        .name_value()
+                        .map_or(None, |value| value.value_as_str())
+                        == Some(sym::on) =>
+                {
+                    disabled_sanitizers &= !SanitizerSet::CFI
+                }
+                sym::kcfi
+                    if name_value
+                        .args()
+                        .name_value()
+                        .map_or(None, |value| value.value_as_str())
+                        == Some(sym::off) =>
+                {
+                    disabled_sanitizers |= SanitizerSet::KCFI
+                }
+                _ => return None,
+            }
+        }
+        Some(AttributeKind::Sanitize {
+            disabled_sanitizers: DisabledSanitizers(disabled_sanitizers),
+            span: cx.attr_span,
+        })
+    }
 }

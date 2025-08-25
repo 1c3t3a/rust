@@ -22,7 +22,7 @@ use crate::attributes::allow_unstable::{
 use crate::attributes::body::CoroutineParser;
 use crate::attributes::codegen_attrs::{
     ColdParser, CoverageParser, ExportNameParser, NakedParser, NoMangleParser, OptimizeParser,
-    TargetFeatureParser, TrackCallerParser, UsedParser,
+    TargetFeatureParser, TrackCallerParser, UsedParser, SanitizeParser
 };
 use crate::attributes::confusables::ConfusablesParser;
 use crate::attributes::deprecation::DeprecationParser;
@@ -187,6 +187,7 @@ attribute_parsers!(
         Single<RustcLayoutScalarValidRangeEnd>,
         Single<RustcLayoutScalarValidRangeStart>,
         Single<RustcObjectLifetimeDefaultParser>,
+        Single<SanitizeParser>,
         Single<ShouldPanicParser>,
         Single<SkipDuringMethodDispatchParser>,
         Single<TransparencyParser>,

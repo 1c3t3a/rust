@@ -1,3 +1,4 @@
+use rustc_target::spec::SanitizerSet;
 pub use ReprAttr::*;
 use rustc_abi::Align;
 use rustc_ast::token::CommentKind;
@@ -117,6 +118,19 @@ pub enum DeprecatedSince {
 pub enum CoverageAttrKind {
     On,
     Off,
+}
+
+#[derive(Copy, Debug, Eq, PartialEq, Encodable, Decodable, Clone, HashStable_Generic)]
+pub struct DisabledSanitizers(pub SanitizerSet);
+
+impl PrintAttribute for DisabledSanitizers {
+    fn should_render(&self) -> bool {
+        false
+    }
+
+    fn print_attribute(&self, _p: &mut rustc_ast_pretty::pp::Printer) {
+        
+    }
 }
 
 impl Deprecation {
@@ -478,6 +492,9 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_object_lifetime_default]`.
     RustcObjectLifetimeDefault,
+
+    /// Represents `#[sanitize(xyz = "on|off")]`.
+    Sanitize { disabled_sanitizers: DisabledSanitizers, span: Span },
 
     /// Represents `#[should_panic]`
     ShouldPanic { reason: Option<Symbol>, span: Span },
